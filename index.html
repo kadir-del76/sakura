@@ -38,7 +38,10 @@
 }
 :root[data-theme="dark"]{--bg:#111317;--surface:#1A1D23;--ink:#ECEBE6;--muted:#9A9EA6;--line:#2A2E36;--act:#ECEBE6;--act-ink:#111317;--soft:#252A35;--sakura:#D99AAB;--warn:#E07A7A}
 *,*::before,*::after{box-sizing:inherit}
-html{scroll-padding-top:env(safe-area-inset-top,0px)}
+[hidden]{display:none!important}   /* ausgeblendet heißt immer ausgeblendet, auch bei Flex-Elementen */
+html{scroll-padding-top:env(safe-area-inset-top,0px);touch-action:manipulation;-webkit-text-size-adjust:100%}
+/* Kein Doppeltipp-Zoom: Schnelles Tippen auf + und − soll nur zählen, nicht vergrößern. */
+button,.chip,.ctrl,.switch{touch-action:manipulation;-webkit-user-select:none;user-select:none}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:1rem;line-height:1.5;-webkit-tap-highlight-color:transparent}
 button{font:inherit;cursor:pointer;color:inherit}
 :focus-visible{outline:3px solid var(--act);outline-offset:2px}
@@ -67,6 +70,9 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
 .ctrl .val:hover{border-bottom-color:var(--muted)}
 .ctrl .val:focus{outline:none;border-bottom:2px solid var(--act);background:var(--bg)}
 .switch{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-top:.75rem;font-weight:500}
+.voicerow{display:flex;align-items:center;gap:.5rem;padding-top:.75rem;font-weight:500}
+.voicerow label{flex:none}
+.voicerow select{flex:1;min-width:0;font:inherit;font-size:1rem;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:.5rem .6rem}
 .switch input{appearance:none;width:3rem;height:1.75rem;border-radius:999px;background:var(--line);position:relative;cursor:pointer;transition:background .2s;margin:0}
 .switch input::after{content:"";position:absolute;top:.2rem;left:.2rem;width:1.35rem;height:1.35rem;border-radius:50%;background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .2s}
 .switch input:checked{background:var(--act)}
@@ -208,6 +214,7 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
           <div class="ctrl" role="group" aria-labelledby="l-rounds"><button data-k="rounds" data-d="-1" aria-label="One round fewer">−</button><input class="val" id="o-rounds" inputmode="numeric" autocomplete="off" enterkeyhint="done" aria-labelledby="l-rounds"><button data-k="rounds" data-d="1" aria-label="One round more">+</button></div></div>
         <label class="switch">Bell and beeps <input type="checkbox" id="sound" checked></label>
         <label class="switch" id="speakRow">Read pairings aloud <input type="checkbox" id="speak" checked></label>
+        <div class="voicerow" id="voiceRow"><label for="voiceSel">Voice</label><select id="voiceSel"></select><button type="button" class="mini" id="voiceTest">Test</button></div>
       </section>
 
       <section class="card" aria-labelledby="h-ppl">
@@ -282,7 +289,7 @@ const fmt=sec=>Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');
 
 /* ---------- Einstellungen + Speichern ---------- */
 const LIMITS={round:{step:30,min:30,max:1800},pause:{step:15,min:0,max:600},rounds:{step:1,min:1,max:40}};
-const cfg={round:300,pause:60,rounds:6,sound:true,speak:true};
+const cfg={round:300,pause:60,rounds:6,sound:true,speak:true,voice:''};
 let roster=[];   // alle Mitglieder: {n: Name, here: anwesend?}
 let people=[];   // nur die Anwesenden – daraus entstehen die Paarungen
 const syncPeople=()=>{people=roster.filter(r=>r.here).map(r=>r.n)};
@@ -293,7 +300,7 @@ function save(){try{localStorage.setItem(KEY,JSON.stringify({...cfg,roster}))}ca
 (function load(){
   try{
     const d=JSON.parse(localStorage.getItem(KEY)||'null');
-    if(d){['round','pause','rounds'].forEach(k=>{if(Number.isFinite(d[k]))cfg[k]=d[k]});cfg.sound=d.sound!==false;cfg.speak=d.speak!==false;
+    if(d){['round','pause','rounds'].forEach(k=>{if(Number.isFinite(d[k]))cfg[k]=d[k]});cfg.sound=d.sound!==false;cfg.speak=d.speak!==false;cfg.voice=typeof d.voice==='string'?d.voice:'';
       if(Array.isArray(d.roster))roster=d.roster.filter(r=>r&&r.n).map(r=>({n:String(r.n),here:r.here!==false}));
       else if(Array.isArray(d.people))roster=d.people.map(n=>({n:String(n),here:true}));   // Übernahme der alten Liste
       return}
@@ -319,7 +326,8 @@ document.querySelectorAll('.ctrl button').forEach(b=>b.addEventListener('click',
 el.sound.addEventListener('change',()=>{cfg.sound=el.sound.checked;save()});
 const TTS='speechSynthesis' in window&&'SpeechSynthesisUtterance' in window;
 $('#speak').checked=cfg.speak;$('#speakRow').hidden=!TTS;   // Gerät ohne Sprachausgabe: Schalter ausblenden
-$('#speak').addEventListener('change',()=>{cfg.speak=$('#speak').checked;save();if(!cfg.speak)hush()});
+$('#speak').addEventListener('change',()=>{cfg.speak=$('#speak').checked;save();if(!cfg.speak)hush();$('#voiceRow').hidden=!TTS||!cfg.speak});
+$('#voiceRow').hidden=!TTS||!cfg.speak;
 
 /* Werte antippen und eintippen.
    Zeit: "4:30" = 4 min 30 s. Ohne Doppelpunkt: bis 10 = Minuten, ab 11 = Sekunden
@@ -563,29 +571,66 @@ function bell(){if(!ctx||!cfg.sound)return;if(!bellBuf){gong();return}
    In jeder Pause liest das Handy vor, wer als Nächstes mit wem rollt (nicht im Countdown vor Runde 1).
    Start 1,5 s nach der Glocke, damit sich beides nicht überlagert. Beginnt die Runde, wird abgebrochen.
    Die Stimme ist die eingebaute Sprachausgabe des Handys: funktioniert offline. */
-let speakTimer=null,enVoice=null;
-function pickVoice(){
-  if(!TTS)return;const v=speechSynthesis.getVoices();
-  enVoice=v.find(x=>/^en(-|_)/i.test(x.lang)&&x.localService)||v.find(x=>/^en/i.test(x.lang))||null;
+let speakTimer=null,speakTok=0,voices=[];
+/* Stimmenwahl: Spaß- und Roboterstimmen des iPhones ausschließen, die natürlichsten bevorzugen.
+   Warum: Sonst nimmt das Handy die erste englische Stimme, oft eine Effekt-Stimme wie "Albert". */
+const NOVELTY=/^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Jester|Junior|Kathy|Organ|Pipe Organ|Princess|Ralph|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Hysterical|Grandma|Grandpa|Eddy|Flo|Reed|Rocko|Sandy|Shelley)\b/i;
+const GOOD=/(Samantha|Ava|Allison|Susan|Zoe|Evan|Nathan|Tom|Alex|Daniel|Karen|Moira|Tessa|Serena|Kate|Oliver|Aria|Jenny|Guy|Google US English|Google UK English)/i;
+function voiceScore(v){
+  let sc=0;
+  if(/premium|enhanced|natural|neural/i.test(v.name))sc+=100;
+  if(GOOD.test(v.name))sc+=40;
+  if(/^en[-_]US/i.test(v.lang))sc+=10;else if(/^en[-_]GB/i.test(v.lang))sc+=8;
+  if(v.localService)sc+=5;   // funktioniert offline
+  return sc;
 }
+function pickVoice(){
+  if(!TTS)return;
+  voices=speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)&&!NOVELTY.test(v.name)).sort((x,y)=>voiceScore(y)-voiceScore(x));
+  const sel=$('#voiceSel');if(!sel)return;
+  sel.innerHTML='<option value="">Best available</option>'+voices.map(v=>`<option value="${esc(v.name)}">${esc(v.name.replace(/ \(.*\)$/,''))} (${esc(v.lang)})</option>`).join('');
+  sel.value=voices.some(v=>v.name===cfg.voice)?cfg.voice:'';
+}
+const currentVoice=()=>voices.find(v=>v.name===cfg.voice)||voices[0]||null;
 if(TTS){pickVoice();try{speechSynthesis.addEventListener('voiceschanged',pickVoice)}catch(e){}}
+$('#voiceSel').addEventListener('change',e=>{cfg.voice=e.target.value;save()});
+/* Satz für Satz sprechen, mit kurzer Pause dazwischen. Warum: iPhone-Stimmen machen bei Punkten kaum Pausen. */
+function speakLines(lines){
+  const tok=++speakTok;let i=0;
+  const next=()=>{
+    if(tok!==speakTok||i>=lines.length)return;
+    const [text,gap]=lines[i++];let moved=false;
+    const go=()=>{if(moved)return;moved=true;setTimeout(next,gap)};
+    try{
+      const u=new SpeechSynthesisUtterance(text);u.lang='en-US';const v=currentVoice();if(v){u.voice=v;u.lang=v.lang}
+      u.rate=.9;u.pitch=1;u.volume=1;u.onend=go;u.onerror=go;speechSynthesis.speak(u);
+      setTimeout(go,1800+text.length*90);   // Sicherheitsnetz, falls das Handy das Ende nicht meldet
+    }catch(e){go()}
+  };
+  next();
+}
+$('#voiceTest').addEventListener('click',()=>{unlockSpeech();hush();speakLines(announceLines(null))});
 function unlockSpeech(){   // iPhone: Sprachausgabe muss einmal durch einen Tipp freigeschaltet werden
   if(!TTS||unlockSpeech.done)return;unlockSpeech.done=true;
   try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(e){}
 }
-function hush(){clearTimeout(speakTimer);if(TTS)try{speechSynthesis.cancel()}catch(e){}}
-function announceText(r,updated){
-  const R=schedule[r];if(!R)return'';
-  const parts=[(updated?'Pairings updated. ':'')+`Round ${r+1}.`];
-  R.pairs.forEach(p=>parts.push(`${p.a} with ${p.b}.`));
-  if(R.bye)parts.push(`${R.bye} sits out.`);
-  return parts.join(' ');
+function hush(){clearTimeout(speakTimer);speakTok++;if(TTS)try{speechSynthesis.cancel()}catch(e){}}
+/* Takt der Ansage: deutliche Pause nach "Round X", danach die Paarungen flüssig hintereinander.
+   r = null liefert die Beispielansage für den Test-Knopf. */
+const GAP_HEAD=1100,GAP_PAIR=150;
+function announceLines(r,updated){
+  const R=r==null?{pairs:[{a:'Anna',b:'Ben'},{a:'Can',b:'Dana'}],bye:'Ede'}:schedule[r];if(!R)return[];
+  const lines=[];if(updated)lines.push(['Pairings updated.',500]);
+  lines.push([`Round ${r==null?2:r+1}.`,GAP_HEAD]);
+  R.pairs.forEach(p=>lines.push([`${p.a} with ${p.b}.`,GAP_PAIR]));
+  if(R.bye)lines.push([`${R.bye} sits out.`,0]);
+  return lines;
 }
 function announce(r,updated,delay){
   if(!TTS||!cfg.speak)return;hush();
   speakTimer=setTimeout(()=>{
     const ph=T.phases[T.i];if(!T.running||!ph||ph.type!=='pause')return;
-    try{const u=new SpeechSynthesisUtterance(announceText(r,updated));u.lang='en-US';if(enVoice)u.voice=enVoice;u.rate=.95;u.volume=1;speechSynthesis.speak(u)}catch(e){}
+    speakLines(announceLines(r,updated));
   },delay==null?1500:delay);
 }
 // Bei jedem Phasenwechsel: in der Pause ansagen, sonst Ansage beenden

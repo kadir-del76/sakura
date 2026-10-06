@@ -1,6 +1,6 @@
 // Sakura Service Worker – macht die App offline nutzbar.
 // WICHTIG: Bei jedem Update der App die Versionsnummer erhöhen, sonst behalten Handys die alte Version.
-const VERSION='sakura-v1';
+const VERSION='sakura-v2';
 const FILES=[
   "./",
   "fonts/fonts.css",
