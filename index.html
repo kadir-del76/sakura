@@ -212,12 +212,13 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
           <div class="ctrl" role="group" aria-labelledby="l-pause"><button data-k="pause" data-d="-1" aria-label="Shorter rest">−</button><input class="val" id="o-pause" inputmode="decimal" autocomplete="off" enterkeyhint="done" aria-labelledby="l-pause"><button data-k="pause" data-d="1" aria-label="Longer rest">+</button></div></div>
         <div class="step"><span class="lbl" id="l-rounds">Rounds</span>
           <div class="ctrl" role="group" aria-labelledby="l-rounds"><button data-k="rounds" data-d="-1" aria-label="One round fewer">−</button><input class="val" id="o-rounds" inputmode="numeric" autocomplete="off" enterkeyhint="done" aria-labelledby="l-rounds"><button data-k="rounds" data-d="1" aria-label="One round more">+</button></div></div>
+        <label class="switch">Pairings <input type="checkbox" id="pairsOn" checked></label>
         <label class="switch">Bell and beeps <input type="checkbox" id="sound" checked></label>
         <label class="switch" id="speakRow">Read pairings aloud <input type="checkbox" id="speak" checked></label>
         <div class="voicerow" id="voiceRow"><label for="voiceSel">Voice</label><select id="voiceSel"></select><button type="button" class="mini" id="voiceTest">Test</button></div>
       </section>
 
-      <section class="card" aria-labelledby="h-ppl">
+      <section class="card" id="athletesCard" aria-labelledby="h-ppl">
         <h2 id="h-ppl">Athletes <small id="count"></small></h2>
         <div class="entry">
           <input id="nameIn" type="text" placeholder="Enter name" autocomplete="off" enterkeyhint="done" aria-label="Enter name">
@@ -289,7 +290,7 @@ const fmt=sec=>Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');
 
 /* ---------- Einstellungen + Speichern ---------- */
 const LIMITS={round:{step:30,min:30,max:1800},pause:{step:15,min:0,max:600},rounds:{step:1,min:1,max:40}};
-const cfg={round:300,pause:60,rounds:6,sound:true,speak:true,voice:''};
+const cfg={round:300,pause:60,rounds:6,sound:true,speak:true,voice:'',pairs:true};
 let roster=[];   // alle Mitglieder: {n: Name, here: anwesend?}
 let people=[];   // nur die Anwesenden – daraus entstehen die Paarungen
 const syncPeople=()=>{people=roster.filter(r=>r.here).map(r=>r.n)};
@@ -300,7 +301,7 @@ function save(){try{localStorage.setItem(KEY,JSON.stringify({...cfg,roster}))}ca
 (function load(){
   try{
     const d=JSON.parse(localStorage.getItem(KEY)||'null');
-    if(d){['round','pause','rounds'].forEach(k=>{if(Number.isFinite(d[k]))cfg[k]=d[k]});cfg.sound=d.sound!==false;cfg.speak=d.speak!==false;cfg.voice=typeof d.voice==='string'?d.voice:'';
+    if(d){['round','pause','rounds'].forEach(k=>{if(Number.isFinite(d[k]))cfg[k]=d[k]});cfg.sound=d.sound!==false;cfg.speak=d.speak!==false;cfg.voice=typeof d.voice==='string'?d.voice:'';cfg.pairs=d.pairs!==false;
       if(Array.isArray(d.roster))roster=d.roster.filter(r=>r&&r.n).map(r=>({n:String(r.n),here:r.here!==false}));
       else if(Array.isArray(d.people))roster=d.people.map(n=>({n:String(n),here:true}));   // Übernahme der alten Liste
       return}
@@ -311,6 +312,9 @@ function save(){try{localStorage.setItem(KEY,JSON.stringify({...cfg,roster}))}ca
 })();
 el.sound.checked=cfg.sound;
 
+/* Reiner Timer: Schalter "Pairings" aus ODER weniger als zwei Leute da.
+   Warum automatisch: Der Timer soll nie blockiert sein, nur weil keine Namen eingetragen sind. */
+const pairMode=()=>cfg.pairs&&people.length>=2;
 function renderSettings(){
   const show={round:fmt(cfg.round),pause:cfg.pause?fmt(cfg.pause):'none',rounds:String(cfg.rounds)};
   for(const k in show){const i=$('#o-'+k);if(document.activeElement!==i)i.value=show[k]}
@@ -318,12 +322,16 @@ function renderSettings(){
   const total=10+cfg.rounds*cfg.round+(cfg.rounds-1)*cfg.pause;
   const mins=Math.max(1,Math.round(total/60));
   el.total.textContent=view==='pairs'?`~${mins} min`:`${cfg.rounds} ${cfg.rounds===1?'round':'rounds'}, ~${mins} min`;
+  el.dockLabel.textContent=view==='pairs'?'Start session':pairMode()?'Create pairings':'Start timer';
+  el.start.disabled=false;
+  $('#athletesCard').hidden=!cfg.pairs;$('#pairsOn').checked=cfg.pairs;
 }
 document.querySelectorAll('.ctrl button').forEach(b=>b.addEventListener('click',()=>{
   const k=b.dataset.k,L=LIMITS[k];cfg[k]=Math.min(L.max,Math.max(L.min,cfg[k]+L.step*(+b.dataset.d)));
   save();renderSettings();if(k==='rounds')rebuild();else updateInfo();
 }));
 el.sound.addEventListener('change',()=>{cfg.sound=el.sound.checked;save()});
+$('#pairsOn').addEventListener('change',e=>{cfg.pairs=e.target.checked;save();renderSettings()});
 const TTS='speechSynthesis' in window&&'SpeechSynthesisUtterance' in window;
 $('#speak').checked=cfg.speak;$('#speakRow').hidden=!TTS;   // Gerät ohne Sprachausgabe: Schalter ausblenden
 $('#speak').addEventListener('change',()=>{cfg.speak=$('#speak').checked;save();if(!cfg.speak)hush();$('#voiceRow').hidden=!TTS||!cfg.speak});
@@ -408,7 +416,7 @@ el.nameIn.addEventListener('input',()=>{el.msg.textContent=''});
 const uniqueRounds=n=>n<2?0:(n%2===0?n-1:n);
 function updateInfo(){
   const n=people.length,u=uniqueRounds(n);
-  if(n<2){el.info.innerHTML=roster.length>1?'<p class="hint">Mark at least two athletes as here to create pairings.</p>':'';return}
+  if(n<2){el.info.innerHTML=roster.length>1?'<p class="hint">Fewer than two athletes here: the session runs as a timer only.</p>':'';return}
   let h=`<p class="hint">${n%2?'Odd number of athletes here: one sits out each round. ':''}Up to ${u} rounds without repeat pairings.</p>`;
   if(cfg.rounds>u)h+=`<p class="hint warn">From round ${u+1} on, pairings have to repeat. They are marked in the pairings.</p>`;
   el.info.innerHTML=h;
@@ -439,14 +447,14 @@ function buildSchedule(names,rounds){
 let schedule=[];
 function rebuild(){
   updateInfo();
-  if(people.length<2){schedule=[];el.planBody.innerHTML='';el.start.disabled=true;if(view==='pairs')setView('setup');return}
+  if(people.length<2){schedule=[];el.planBody.innerHTML='';if(view==='pairs')setView('setup');else renderSettings();return}
   schedule=buildSchedule(people,cfg.rounds);
   const n=people.length,u=uniqueRounds(n);
   el.pvSum.textContent=`${n} athletes, ${cfg.rounds} ${cfg.rounds===1?'round':'rounds'} of ${fmt(cfg.round)}, ${cfg.pause?fmt(cfg.pause)+' rest':'no rest'}. `+
     (cfg.rounds>u?`Pairings repeat from round ${u+1} on (marked).`:'No pairing repeats.');
   el.pvSum.classList.toggle('warn',cfg.rounds>u);
   renderPlan();
-  el.start.disabled=false;
+  renderSettings();
 }
 function renderPlan(){
   el.planBody.innerHTML='<div class="rounds">'+schedule.map((r,i)=>`<div class="round"><h3>Round ${i+1}</h3>`+
@@ -535,7 +543,6 @@ el.shuffle.addEventListener('click',rebuild);
 function setView(v,push){
   view=v;
   el.setupView.hidden=v!=='setup';el.pairView.hidden=v!=='pairs';
-  el.dockLabel.textContent=v==='pairs'?'Start session':'Create pairings';
   renderSettings();window.scrollTo(0,0);
   if(push)try{history.pushState({view:v},'')}catch(e){}
 }
@@ -634,7 +641,7 @@ function announce(r,updated,delay){
   },delay==null?1500:delay);
 }
 // Bei jedem Phasenwechsel: in der Pause ansagen, sonst Ansage beenden
-function phaseSpeech(){const ph=T.phases[T.i];if(!T.done&&T.running&&ph&&ph.type==='pause')announce(ph.r);else hush()}
+function phaseSpeech(){const ph=T.phases[T.i];if(!T.solo&&!T.done&&T.running&&ph&&ph.type==='pause')announce(ph.r);else hush()}
 const flashEl=$('#flash');
 function flash(n){flashEl.className='';void flashEl.offsetWidth;flashEl.className='go'+n}
 const sfx={start:()=>{bell();flash(1)},warn:()=>{beep(700,.15);beep(700,.15,.25)},end:()=>{bell();flash(2)}};
@@ -657,7 +664,8 @@ const PREP=10000;
 const T={phases:[],i:0,remaining:0,endAt:0,running:false,warned:false,done:false,lastSec:null};
 function setupTimer(){
   T.phases=[{type:'prep',r:0,dur:PREP}];
-  schedule.forEach((_,i)=>{T.phases.push({type:'round',r:i,dur:cfg.round*1000});if(i<schedule.length-1&&cfg.pause>0)T.phases.push({type:'pause',r:i+1,dur:cfg.pause*1000})});
+  const n=T.solo?cfg.rounds:schedule.length;
+  for(let i=0;i<n;i++){T.phases.push({type:'round',r:i,dur:cfg.round*1000});if(i<n-1&&cfg.pause>0)T.phases.push({type:'pause',r:i+1,dur:cfg.pause*1000})}
   T.i=0;T.remaining=PREP;T.running=false;T.warned=false;T.done=false;T.lastSec=null;
 }
 function goPhase(i){
@@ -699,7 +707,7 @@ function toggle(){
   else{const fresh=T.remaining===T.phases[T.i].dur;run();if(fresh&&T.phases[T.i].type==='round')sfx.start()}
   render();
 }
-function pairsHTML(r,live){const s=schedule[r];if(!s)return'';
+function pairsHTML(r,live){if(T.solo)return'';const s=schedule[r];if(!s)return'';
   if(!s.pairs.length&&!(s.extra||[]).length)return '<div class="tpin"><div class="tbye">Not enough athletes here for pairings.</div></div>';
   const extra=live?(s.extra||[]):[];
   const here=new Set(people),nm=n=>live&&!here.has(n)?`<span class="gone">${esc(n)}</span>`:`<span>${esc(n)}</span>`;   // Gegangene durchgestrichen
@@ -726,20 +734,22 @@ function renderClock(){
   const ph=T.phases[T.i];el.tProg.style.width=T.done?'100%':(100*(1-T.remaining/ph.dur)).toFixed(2)+'%';
 }
 function render(){
-  const ph=T.phases[T.i],total=schedule.length;
+  $('#tPeople').hidden=!!T.solo;
+  const ph=T.phases[T.i],total=T.solo?cfg.rounds:schedule.length;
   const final=ph&&ph.type==='round'&&T.remaining<=10000&&ph.dur>15000;
   el.timer.className='on '+(T.done?'done':final?'final':ph.type);
   el.tPrev.disabled=T.i===0||T.done;el.tNext.disabled=T.done;
   if(T.done){el.tPhase.innerHTML='<span class="jp">それまで</span>Session complete';el.tClock.textContent='0:00';el.tSub.textContent='Good rolls.';el.tPairs.innerHTML='';el.tToggle.textContent='Restart';el.tProg.style.width='100%';el.timer.dataset.c=0;el.timer.dataset.p=0;return}
   const stop=T.running?'':' <small>paused</small>';
-  if(ph.type==='prep'){el.tPhase.innerHTML='<span class="jp">礼</span>Get ready'+stop;el.tSub.textContent='Up next';el.tPairs.innerHTML=pairsHTML(0)}
+  if(ph.type==='prep'){el.tPhase.innerHTML='<span class="jp">礼</span>Get ready'+stop;el.tSub.textContent=T.solo?'':'Up next';el.tPairs.innerHTML=pairsHTML(0)}
   else if(ph.type==='round'){el.tPhase.innerHTML=`<span class="jp">始め</span>Round ${ph.r+1} <small>/ ${total}</small>`+stop;el.tSub.textContent='';el.tPairs.innerHTML=pairsHTML(ph.r,true)}
   else{el.tPhase.innerHTML='<span class="jp">待て</span>Rest'+stop;el.tSub.textContent=`Up next: round ${ph.r+1}`;el.tPairs.innerHTML=pairsHTML(ph.r)}
   el.tToggle.textContent=T.running?'Pause':'Resume';
   renderClock();fit();
 }
-el.start.addEventListener('click',()=>{if(!schedule.length)return;
-  if(view==='setup'){setView('pairs',true);return}
+el.start.addEventListener('click',()=>{
+  if(view==='setup'&&pairMode()&&schedule.length){setView('pairs',true);return}
+  T.solo=!(view==='pairs'&&pairMode()&&schedule.length);   // reiner Timer ohne Paarungen
   unlockAudio();unlockSpeech();setupTimer();run();render();el.tToggle.focus()});
 el.tToggle.addEventListener('click',toggle);
 
