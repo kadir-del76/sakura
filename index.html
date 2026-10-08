@@ -140,6 +140,8 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
 #timer.done{--bgc:#1B1D24;--fg:#FFFFFF;--chip:rgba(255,255,255,.12);--chipb:rgba(255,255,255,.35)}
 .tbar{display:flex;justify-content:space-between;align-items:center;gap:1rem}
 .tbtns{display:flex;gap:.5rem}
+/* Knöpfe immer über der Uhr: Die riesigen Ziffern ragen sonst unsichtbar nach oben und schlucken Tipps */
+.tbar,.tctrl{position:relative;z-index:2}
 .tpair .gone{text-decoration:line-through;opacity:.5}
 .tpair.jump{background:transparent;border:2px dashed var(--fg)}
 .tpair span.tag{grid-column:1/-1;text-align:center;font-family:var(--body);font-size:max(.8rem,.42em);font-weight:600;opacity:.8;text-align:center;margin-top:-.1em}
@@ -431,7 +433,10 @@ function buildSchedule(names,rounds){
   let line=shuffleArr(names);if(line.length%2)line.push(null);
   const m=line.length,per=m-1,seen=new Set(),out=[];
   for(let r=0;r<rounds;r++){
-    const k=r%per;if(r>0&&k===0)line=shuffleArr(line);
+    // Nach einem kompletten Durchgang wiederholt sich derselbe Durchgang in gleicher Reihenfolge.
+    // Warum: Innerhalb eines Durchgangs ist jedes Paar und jede Pause einmalig. Runde "Durchgang+1" ist damit
+    // gleich Runde 1 und hat mit der letzten Runde nichts gemeinsam: kein Paar und keine Pause direkt hintereinander.
+    const k=r%per;
     const rest=line.slice(1),rot=rest.slice(rest.length-k).concat(rest.slice(0,rest.length-k));
     const order=[line[0],...rot],pairs=[];let bye=null;
     for(let i=0;i<m/2;i++){const a=order[i],b=order[m-1-i];
@@ -484,17 +489,24 @@ function planOnce(from){
     if(r.bye){sat.set(r.bye,(sat.get(r.bye)||0)+1);lastBye=r.bye}
   }
   const H=(a,b)=>hist.get(pkey(a,b))||0;
+  // Paare der direkt vorherigen Runde: werden mit einer sehr hohen "Strafe" belegt, damit sie nur
+  // dann wieder vorkommen, wenn es gar nicht anders geht (z. B. bei nur zwei Leuten).
+  let prev=new Set();
+  if(from>0&&schedule[from-1]){const r=schedule[from-1];r.pairs.concat(r.extra||[]).forEach(p=>prev.add(pkey(p.a,p.b)))}
   for(let i=from;i<schedule.length;i++){
     let list=shuffleArr(people),bye=null;
     if(list.length%2){
-      const min=Math.min(...list.map(n=>sat.get(n)||0));
-      let cand=list.filter(n=>(sat.get(n)||0)===min);
-      if(cand.length>1&&lastBye)cand=cand.filter(n=>n!==lastBye);
+      // Reihum aussetzen, aber nie zweimal hintereinander (außer es ist nur eine Person übrig)
+      const others=list.filter(n=>n!==lastBye),pool=others.length?others:list;
+      const min=Math.min(...pool.map(n=>sat.get(n)||0));
+      const cand=pool.filter(n=>(sat.get(n)||0)===min);
       bye=cand[Math.floor(Math.random()*cand.length)];
       list=list.filter(n=>n!==bye);sat.set(bye,(sat.get(bye)||0)+1);lastBye=bye;
-    }
-    const pairs=bestMatching(list,H).map(([a,b])=>({a,b,repeat:H(a,b)>0}));
-    pairs.forEach(p=>{cost+=H(p.a,p.b);hist.set(pkey(p.a,p.b),H(p.a,p.b)+1)});
+    }else lastBye=null;
+    const C=(a,b)=>H(a,b)+(prev.has(pkey(a,b))?1000:0);
+    const pairs=bestMatching(list,C).map(([a,b])=>({a,b,repeat:H(a,b)>0}));
+    pairs.forEach(p=>{cost+=C(p.a,p.b);hist.set(pkey(p.a,p.b),H(p.a,p.b)+1)});
+    prev=new Set(pairs.map(p=>pkey(p.a,p.b)));
     pairs.forEach(p=>{if(coll.compare(p.a,p.b)>0)[p.a,p.b]=[p.b,p.a]});
     pairs.sort((x,y)=>coll.compare(x.a,y.a));
     rounds.push({pairs,bye});
@@ -561,7 +573,8 @@ function loadBell(){
 }
 function unlockAudio(){
   // iPhone: "playback" heißt, Ton auch bei Stummschalter. Ältere Geräte ignorieren das einfach.
-  try{if(navigator.audioSession&&navigator.audioSession.type!=='playback')navigator.audioSession.type='playback'}catch(e){}
+  // iPhone: "ambient" spielt zusammen mit Musik (z. B. Spotify), folgt dafür dem Stummschalter.
+  try{if(navigator.audioSession&&navigator.audioSession.type!=='ambient')navigator.audioSession.type='ambient'}catch(e){}
   try{if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state==='suspended')ctx.resume();loadBell()}catch(e){}}
 function beep(f,d,w){if(!ctx||!cfg.sound)return;const t=ctx.currentTime+(w||0),o=ctx.createOscillator(),g=ctx.createGain();
   o.type='square';o.frequency.value=f;g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.3,t+.01);g.gain.exponentialRampToValueAtTime(.0001,t+d);
@@ -741,9 +754,9 @@ function render(){
   el.tPrev.disabled=T.i===0||T.done;el.tNext.disabled=T.done;
   if(T.done){el.tPhase.innerHTML='<span class="jp">それまで</span>Session complete';el.tClock.textContent='0:00';el.tSub.textContent='Good rolls.';el.tPairs.innerHTML='';el.tToggle.textContent='Restart';el.tProg.style.width='100%';el.timer.dataset.c=0;el.timer.dataset.p=0;return}
   const stop=T.running?'':' <small>paused</small>';
-  if(ph.type==='prep'){el.tPhase.innerHTML='<span class="jp">礼</span>Get ready'+stop;el.tSub.textContent=T.solo?'':'Up next';el.tPairs.innerHTML=pairsHTML(0)}
-  else if(ph.type==='round'){el.tPhase.innerHTML=`<span class="jp">始め</span>Round ${ph.r+1} <small>/ ${total}</small>`+stop;el.tSub.textContent='';el.tPairs.innerHTML=pairsHTML(ph.r,true)}
-  else{el.tPhase.innerHTML='<span class="jp">待て</span>Rest'+stop;el.tSub.textContent=`Up next: round ${ph.r+1}`;el.tPairs.innerHTML=pairsHTML(ph.r)}
+  if(ph.type==='prep'){el.tPhase.innerHTML='<span class="jp">礼</span>Get ready'+stop;el.tSub.textContent=`Up next: round 1 of ${total}`;el.tPairs.innerHTML=pairsHTML(0)}
+  else if(ph.type==='round'){el.tPhase.innerHTML=`<span class="jp">始め</span>Round ${ph.r+1} <small>of ${total}</small>`+stop;el.tSub.textContent='';el.tPairs.innerHTML=pairsHTML(ph.r,true)}
+  else{el.tPhase.innerHTML='<span class="jp">待て</span>Rest'+stop;el.tSub.textContent=`Up next: round ${ph.r+1} of ${total}`;el.tPairs.innerHTML=pairsHTML(ph.r)}
   el.tToggle.textContent=T.running?'Pause':'Resume';
   renderClock();fit();
 }
