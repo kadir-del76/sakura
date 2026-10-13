@@ -99,6 +99,7 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
 .chip.editing{border-style:solid;background:var(--bg);color:var(--ink);padding-right:.3rem}
 .chip .x{display:grid;place-items:center;width:1.9rem;height:1.9rem;border-radius:50%;color:var(--warn);font-size:1.2rem;line-height:1}
 .chips .none{color:var(--muted)}
+.ver{margin:.25rem 0 0;text-align:center;color:var(--muted);font-size:.8rem}
 .hint{margin:.9rem 0 0;font-size:.92rem;color:var(--muted)}
 .hint.warn{color:var(--warn)}
 
@@ -234,6 +235,7 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
         <ul class="chips" id="chips" aria-label="Athlete list"></ul>
         <div id="info"></div>
       </section>
+      <p class="ver" id="appVer"></p>
   </div>
 </div>
 
@@ -296,7 +298,8 @@ const cfg={round:300,pause:60,rounds:6,sound:true,speak:true,voice:'',pairs:true
 let roster=[];   // alle Mitglieder: {n: Name, here: anwesend?}
 let people=[];   // nur die Anwesenden – daraus entstehen die Paarungen
 const syncPeople=()=>{people=roster.filter(r=>r.here).map(r=>r.n)};
-const KEY='sakura-v1';
+const KEY='sakura-v1';   // Speicher-Schlüssel, bleibt gleich (sonst gingen Namen verloren)
+const APP_VERSION='v8';  // sichtbare Versionsnummer, gleich wie in sw.js
 const coll=new Intl.Collator('en',{sensitivity:'base'});
 let view='setup';
 function save(){try{localStorage.setItem(KEY,JSON.stringify({...cfg,roster}))}catch(e){}}
@@ -825,6 +828,7 @@ document.addEventListener('keydown',e=>{if(!el.timer.classList.contains('on')||!
   if(e.code==='Space'){e.preventDefault();toggle()}else if(e.key==='ArrowRight'&&!T.done)goPhase(T.i+1);else if(e.key==='ArrowLeft'&&T.i>0&&!T.done)goPhase(T.i-1)});
 setInterval(tick,200);
 
+$('#appVer').textContent='Sakura '+APP_VERSION;
 renderSettings();renderPeople();rebuild();
 })();
 </script>
