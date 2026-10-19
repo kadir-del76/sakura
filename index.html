@@ -299,7 +299,7 @@ let roster=[];   // alle Mitglieder: {n: Name, here: anwesend?}
 let people=[];   // nur die Anwesenden – daraus entstehen die Paarungen
 const syncPeople=()=>{people=roster.filter(r=>r.here).map(r=>r.n)};
 const KEY='sakura-v1';   // Speicher-Schlüssel, bleibt gleich (sonst gingen Namen verloren)
-const APP_VERSION='v8';  // sichtbare Versionsnummer, gleich wie in sw.js
+const APP_VERSION='v10';  // sichtbare Versionsnummer, gleich wie in sw.js
 const coll=new Intl.Collator('en',{sensitivity:'base'});
 let view='setup';
 function save(){try{localStorage.setItem(KEY,JSON.stringify({...cfg,roster}))}catch(e){}}
@@ -480,42 +480,57 @@ const pkey=(a,b)=>a<b?a+'\u0000'+b:b+'\u0000'+a;
 // Mehrere komplette Planungen der restlichen Runden, die mit den wenigsten Wiederholungen gewinnt.
 // Warum: Runde für Runde "gierig" zu planen kann sich in eine Ecke manövrieren, in der später Wiederholungen nötig werden.
 function replanFrom(from){
+  const n=schedule.length-from;if(n<=0)return;
   let best=null;
-  const tries=people.length<=16?150:40;   // kleine Gruppen: mehr Versuche, kostet kaum Zeit
-  for(let t=0;t<tries;t++){const r=planOnce(from);if(!best||r.cost<best.cost)best=r;if(best.cost===0)break}
+  const tries=people.length<=16?200:60;
+  for(let t=0;t<tries;t++){const r=cycleFrom(from,n);if(!best||r.cost<best.cost)best=r;if(best.cost===0)break}
   best.rounds.forEach((r,k)=>{schedule[from+k]=r});
 }
-function planOnce(from){
-  const hist=new Map(),sat=new Map();let lastBye=null,cost=0;const rounds=[];
-  for(let i=0;i<from&&i<schedule.length;i++){
-    const r=schedule[i];r.pairs.concat(r.extra||[]).forEach(p=>hist.set(pkey(p.a,p.b),(hist.get(pkey(p.a,p.b))||0)+1));
-    if(r.bye){sat.set(r.bye,(sat.get(r.bye)||0)+1);lastBye=r.bye}
-  }
+/* Ab dem Änderungspunkt EINEN vollständigen Durchgang bauen (jeder gegen jeden / jeder einmal Pause),
+   der direkt an die letzte gelaufene Runde anschließt, und diesen Durchgang unverändert in gleicher
+   Reihenfolge wiederholen. Dadurch wiederholt sich nie etwas direkt hintereinander, genau wie beim
+   normalen Erstellen. "cost" zählt Paare, die schon vor dem Änderungspunkt vorkamen – die werden minimiert. */
+function cycleFrom(from,total){
+  // Historie der bereits gelaufenen Runden (für "repeat"-Markierung und als weiche Vermeidung)
+  const hist=new Map();
+  for(let i=0;i<from&&i<schedule.length;i++){const r=schedule[i];r.pairs.concat(r.extra||[]).forEach(p=>hist.set(pkey(p.a,p.b),(hist.get(pkey(p.a,p.b))||0)+1))}
   const H=(a,b)=>hist.get(pkey(a,b))||0;
-  // Paare der direkt vorherigen Runde: werden mit einer sehr hohen "Strafe" belegt, damit sie nur
-  // dann wieder vorkommen, wenn es gar nicht anders geht (z. B. bei nur zwei Leuten).
-  let prev=new Set();
-  if(from>0&&schedule[from-1]){const r=schedule[from-1];r.pairs.concat(r.extra||[]).forEach(p=>prev.add(pkey(p.a,p.b)))}
-  for(let i=from;i<schedule.length;i++){
-    let list=shuffleArr(people),bye=null;
-    if(list.length%2){
-      // Reihum aussetzen, aber nie zweimal hintereinander (außer es ist nur eine Person übrig)
-      const others=list.filter(n=>n!==lastBye),pool=others.length?others:list;
-      const min=Math.min(...pool.map(n=>sat.get(n)||0));
-      const cand=pool.filter(n=>(sat.get(n)||0)===min);
-      bye=cand[Math.floor(Math.random()*cand.length)];
-      list=list.filter(n=>n!==bye);sat.set(bye,(sat.get(bye)||0)+1);lastBye=bye;
-    }else lastBye=null;
-    const C=(a,b)=>H(a,b)+(prev.has(pkey(a,b))?1000:0);
-    const pairs=bestMatching(list,C).map(([a,b])=>({a,b,repeat:H(a,b)>0}));
-    pairs.forEach(p=>{cost+=C(p.a,p.b);hist.set(pkey(p.a,p.b),H(p.a,p.b)+1)});
-    prev=new Set(pairs.map(p=>pkey(p.a,p.b)));
+  // Was lief in der letzten Runde direkt vor "from"? Der neue Durchgang darf nicht damit anfangen.
+  let prevPairs=new Set(),prevBye=null;
+  if(from>0&&schedule[from-1]){const r=schedule[from-1];r.pairs.concat(r.extra||[]).forEach(p=>prevPairs.add(pkey(p.a,p.b)));prevBye=r.bye||null}
+  const base=buildCycle(shuffleArr(people));        // ein kompletter Durchgang mit den Anwesenden
+  // Durchgang so rotieren, dass seine erste Runde nicht an die letzte gelaufene anschließt
+  const L=base.length;let bestRot=0,bestClash=Infinity;
+  for(let rot=0;rot<L;rot++){
+    const first=base[(rot)%L];
+    let clash=(first.bye&&first.bye===prevBye)?1:0;
+    first.pairs.forEach(p=>{if(prevPairs.has(pkey(p.a,p.b)))clash++});
+    if(clash<bestClash){bestClash=clash;bestRot=rot}
+  }
+  const rounds=[];let cost=bestClash;
+  for(let k=0;k<total;k++){
+    const r=base[(bestRot+k)%L];
+    const pairs=r.pairs.map(p=>({a:p.a,b:p.b,repeat:H(p.a,p.b)>0}));
+    pairs.forEach(p=>cost+=H(p.a,p.b));
     pairs.forEach(p=>{if(coll.compare(p.a,p.b)>0)[p.a,p.b]=[p.b,p.a]});
     pairs.sort((x,y)=>coll.compare(x.a,y.a));
-    rounds.push({pairs,bye});
+    rounds.push({pairs,bye:r.bye});
   }
   return {rounds,cost};
 }
+// Ein vollständiger Durchgang (Circle Method): jeder trifft jeden einmal; bei ungerader Zahl setzt jeder einmal aus.
+function buildCycle(names){
+  let line=names.slice();if(line.length%2)line.push(null);
+  const m=line.length,per=m-1,out=[];
+  for(let r=0;r<per;r++){
+    const rest=line.slice(1),rot=rest.slice(rest.length-r).concat(rest.slice(0,rest.length-r));
+    const order=[line[0],...rot],pairs=[];let bye=null;
+    for(let i=0;i<m/2;i++){const a=order[i],b=order[m-1-i];if(a===null||b===null){bye=a===null?b:a;continue}pairs.push({a,b})}
+    out.push({pairs,bye});
+  }
+  return out;
+}
+
 // Paarung mit möglichst wenig Wiederholungen: mehrere zufällige Versuche, jeweils durch Tauschen verbessert.
 function bestMatching(list,H){
   if(list.length<2)return [];
@@ -657,7 +672,13 @@ function announce(r,updated,delay){
   },delay==null?1500:delay);
 }
 // Bei jedem Phasenwechsel: in der Pause ansagen, sonst Ansage beenden
-function phaseSpeech(){const ph=T.phases[T.i];if(!T.solo&&!T.done&&T.running&&ph&&ph.type==='pause')announce(ph.r);else hush()}
+/* Ansage erst nach ANN_DELAY in der Pause (ausgelöst in tick()).
+   Warum über tick() statt setTimeout: so stimmt der Zeitpunkt auch nach Anhalten/Fortsetzen
+   oder wenn das Display kurz aus war. Bei kurzen Pausen rückt die Ansage nach vorn,
+   damit ~15 s Platz bleiben und sie nicht in das 3-2-1-Piepen läuft. */
+const ANN_DELAY=10000,ANN_ROOM=15000;
+function annAt(ph){return Math.max(0,Math.min(ANN_DELAY,ph.dur-ANN_ROOM))}
+function phaseSpeech(){hush()}
 const flashEl=$('#flash');
 function flash(n){flashEl.className='';void flashEl.offsetWidth;flashEl.className='go'+n}
 const sfx={start:()=>{bell();flash(1)},warn:()=>{beep(700,.15);beep(700,.15,.25)},end:()=>{bell();flash(2)}};
@@ -682,11 +703,11 @@ function setupTimer(){
   T.phases=[{type:'prep',r:0,dur:PREP}];
   const n=T.solo?cfg.rounds:schedule.length;
   for(let i=0;i<n;i++){T.phases.push({type:'round',r:i,dur:cfg.round*1000});if(i<n-1&&cfg.pause>0)T.phases.push({type:'pause',r:i+1,dur:cfg.pause*1000})}
-  T.i=0;T.remaining=PREP;T.running=false;T.warned=false;T.done=false;T.lastSec=null;
+  T.i=0;T.remaining=PREP;T.running=false;T.warned=false;T.done=false;T.lastSec=null;T.spoken=false;
 }
 function goPhase(i){
   if(i>=T.phases.length){T.done=true;T.running=false;T.remaining=0;wake(false);render();return}
-  T.i=Math.max(0,i);T.done=false;T.warned=false;T.lastSec=null;T.remaining=T.phases[T.i].dur;
+  T.i=Math.max(0,i);T.done=false;T.warned=false;T.lastSec=null;T.spoken=false;T.remaining=T.phases[T.i].dur;
   if(T.running){T.endAt=Date.now()+T.remaining;if(T.phases[T.i].type==='round')sfx.start()}
   render();phaseSpeech();
 }
@@ -697,6 +718,7 @@ function tick(){
   if(ph.type!=='round'&&sec<=3&&sec>=1&&sec!==T.lastSec){T.lastSec=sec;beep(660,.12)}
   if(ph.type==='round'&&!T.warned&&T.remaining<=10000&&ph.dur>15000){T.warned=true;sfx.warn();render()}
   if(T.remaining<=0){catchUp();return}
+  if(ph.type==='pause'&&!T.solo&&!T.spoken&&ph.dur-T.remaining>=annAt(ph)){T.spoken=true;announce(ph.r,false,0)}
   renderClock();
 }
 /* Nachholen: Jede neue Phase beginnt genau am Ende der vorherigen, nicht erst "jetzt".
@@ -710,7 +732,7 @@ function catchUp(){
     T.i++;T.endAt+=T.phases[T.i].dur;
   }
   const ph=T.phases[T.i];
-  T.remaining=T.endAt-now;T.lastSec=null;
+  T.remaining=T.endAt-now;T.lastSec=null;T.spoken=false;
   T.warned=ph.type==='round'&&T.remaining<=10000;   // verpasste 10-s-Warnung nicht nachträglich piepen
   if(ph.type==='round')sfx.start();else sfx.end();
   render();phaseSpeech();
@@ -799,7 +821,7 @@ function closeSheet(){
   if(ph.type==='round')jumpIns(ph.r);   // zuerst: spontane Einstiege zählen schon zur Historie
   replanFrom(from);
   renderPlan();render();
-  if(ph.type==='pause'&&T.running)announce(ph.r,true,300);
+  if(ph.type==='pause'&&T.running&&T.spoken)announce(ph.r,true,300);   // sonst kommt die Ansage regulär nach 10 s
   hint(from<schedule.length?`Pairings updated from round ${from+1}`:'No rounds left to update');
 }
 $('#tPeople').addEventListener('click',openSheet);
