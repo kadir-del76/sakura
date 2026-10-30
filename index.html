@@ -188,6 +188,19 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
 .tmain{min-width:11rem;height:3.6rem;border-radius:999px;border:0;background:var(--fg);color:var(--bgc);font-family:var(--cond);font-weight:800;font-size:1.45rem;letter-spacing:.02em;padding:0 1.6rem}
 .progress{height:6px;border-radius:999px;background:var(--chip);margin-top:1rem;overflow:hidden}
 .progress i{display:block;height:100%;width:0;background:var(--fg);opacity:.75}
+/* Reservierter Platz für spätere Werbung (Standardbanner 320×50 / 728×90). Bleibt leer, bis Werbung eingebaut wird. */
+.adslot{flex:none;height:50px;margin-top:.7rem;border-radius:10px;overflow:hidden}
+@media (min-width:600px) and (min-height:600px){.adslot{height:90px;max-width:728px;width:100%;margin-left:auto;margin-right:auto}}
+/* Großmodus (Tablet, Pause): Karten enger, damit mehr Platz für die Schrift bleibt */
+#timer.big .tpin{gap:.18em}
+#timer.big .tpair{padding:.12em .45em;border-radius:14px}
+#timer.big .tpair .vs{font-size:.38em}
+#timer.big .tsub{margin-bottom:.3rem}
+/* Stapelmodus: Name über Name statt nebeneinander – bei wenigen Paaren ist die Breite sonst der Engpass */
+#timer.stack .tpin{grid-template-columns:repeat(auto-fit,minmax(min(var(--scol,99em),100%),1fr));line-height:1}
+#timer.stack .tpair{grid-template-columns:1fr;text-align:center;gap:0;padding:.04em .3em .08em;line-height:.98}
+#timer.stack .tpair span,#timer.stack .tpair span:last-child{text-align:center}
+#timer.stack .tpair .vs{font-size:.22em;line-height:1.1}
 #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:10}
 #flash.go1{animation:flash .7s ease-out 1}
 #flash.go2{animation:flash .55s ease-out 2}
@@ -281,6 +294,7 @@ main{max-width:70rem;margin:0 auto;padding:1.25rem 1rem 8rem}
     <button class="ibtn" id="tNext" aria-label="Next phase"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
   </div>
   <div class="progress" aria-hidden="true"><i id="tProg"></i></div>
+  <div class="adslot" id="adSlot" aria-hidden="true"></div>
 </div>
 
 <script>
@@ -299,7 +313,7 @@ let roster=[];   // alle Mitglieder: {n: Name, here: anwesend?}
 let people=[];   // nur die Anwesenden – daraus entstehen die Paarungen
 const syncPeople=()=>{people=roster.filter(r=>r.here).map(r=>r.n)};
 const KEY='sakura-v1';   // Speicher-Schlüssel, bleibt gleich (sonst gingen Namen verloren)
-const APP_VERSION='v10';  // sichtbare Versionsnummer, gleich wie in sw.js
+const APP_VERSION='v12';  // sichtbare Versionsnummer, gleich wie in sw.js
 const coll=new Intl.Collator('en',{sensitivity:'base'});
 let view='setup';
 function save(){try{localStorage.setItem(KEY,JSON.stringify({...cfg,roster}))}catch(e){}}
@@ -758,8 +772,44 @@ function pairsHTML(r,live){if(T.solo)return'';const s=schedule[r];if(!s)return''
 // Pause/Countdown: Namen so groß wie möglich, die Uhr wird nur so weit kleiner wie nötig.
 // Runde: Uhr bleibt groß. Nur wenn es gar nicht anders passt, eine Stufe kleiner.
 const FIT_REST=[0,1,2,3].flatMap(p=>[0,1,2,3].map(c=>[c,p])),FIT_ROUND=[[0,0],[0,1],[0,2],[0,3],[1,3]];
+/* Tablet, Pause/Countdown: Paarungen zusätzlich VERGRÖSSERN, solange alles passt.
+   Je weniger Leute, desto größer. Auf dem Handy bleibt es wie bisher.
+   Warum nur Tablet: Auf dem Handy ist die Breite der Engpass, größere Namen würden umbrechen. */
+const GROW=[9,8,7.2,6.5,5.8,5.4,5.1,4.8,4.5,4.3,3.9,3.5,3.1,2.8,2.4,2.1,1.8,1.55,1.35,1.15];
+const isTablet=()=>Math.min(innerWidth,innerHeight)>=600;
+function fitsNow(){
+  if(el.tPairs.scrollHeight>el.tPairs.clientHeight+1)return false;
+  // kein Name darf in eine zweite Zeile umbrechen
+  for(const sp of el.tPairs.querySelectorAll('.tpair>span:not(.tag):not(.vs)')){
+    const fs=parseFloat(getComputedStyle(sp).fontSize);if(sp.getBoundingClientRect().height>fs*1.45)return false}
+  return true;
+}
+function bestGrow(){
+  for(const g of GROW)for(const c of (el.timer.classList.contains('stack')?[0,1,2,3]:[0,1,2,3])){
+    el.timer.dataset.c=c;el.timer.dataset.p=0;el.timer.style.setProperty('--pf',g);
+    if(fitsNow())return {g,c};
+  }
+  return null;
+}
 function fit(){
-  const ph=T.phases[T.i];
+  const ph=T.phases[T.i],t=el.timer;
+  t.style.removeProperty('--pf');t.style.removeProperty('--scol');t.classList.remove('big','stack');
+  if(!T.done&&ph&&ph.type!=='round'&&!T.solo&&isTablet()&&el.tPairs.querySelector('.tpair')){
+    t.classList.add('big');
+    // Drei Anordnungen probieren: nebeneinander (gewohnt), gestapelt in einer Spalte, gestapelt mehrspaltig.
+    const modes=[{stack:false},{stack:true,scol:'99em'},{stack:true,scol:'3.2em'}];
+    let win=null;
+    for(const m of modes){
+      t.classList.toggle('stack',m.stack);if(m.scol)t.style.setProperty('--scol',m.scol);else t.style.removeProperty('--scol');
+      const r=bestGrow();if(!r)continue;
+      // Gestapelt nur, wenn es deutlich größer wird – sonst bleibt das gewohnte Bild
+      const score=m.stack?r.g/1.1:r.g;
+      if(!win||score>win.score)win={...r,...m,score};
+    }
+    if(win){t.classList.toggle('stack',win.stack);if(win.scol)t.style.setProperty('--scol',win.scol);else t.style.removeProperty('--scol');
+      t.dataset.c=win.c;t.dataset.p=0;t.style.setProperty('--pf',win.g);return}
+    t.style.removeProperty('--pf');t.style.removeProperty('--scol');t.classList.remove('big','stack');
+  }
   const steps=(T.done||!ph)?[[0,0]]:(ph.type==='round'?FIT_ROUND:FIT_REST);
   for(const [c,p] of steps){
     el.timer.dataset.c=c;el.timer.dataset.p=p;
@@ -777,7 +827,7 @@ function render(){
   const final=ph&&ph.type==='round'&&T.remaining<=10000&&ph.dur>15000;
   el.timer.className='on '+(T.done?'done':final?'final':ph.type);
   el.tPrev.disabled=T.i===0||T.done;el.tNext.disabled=T.done;
-  if(T.done){el.tPhase.innerHTML='<span class="jp">それまで</span>Session complete';el.tClock.textContent='0:00';el.tSub.textContent='Good rolls.';el.tPairs.innerHTML='';el.tToggle.textContent='Restart';el.tProg.style.width='100%';el.timer.dataset.c=0;el.timer.dataset.p=0;return}
+  if(T.done){el.tPhase.innerHTML='<span class="jp">それまで</span>Session complete';el.tClock.textContent='0:00';el.tSub.textContent='Good rolls.';el.tPairs.innerHTML='';el.tToggle.textContent='Restart';el.tProg.style.width='100%';el.timer.dataset.c=0;el.timer.dataset.p=0;el.timer.style.removeProperty('--pf');return}
   const stop=T.running?'':' <small>paused</small>';
   if(ph.type==='prep'){el.tPhase.innerHTML='<span class="jp">礼</span>Get ready'+stop;el.tSub.textContent=`Up next: round 1 of ${total}`;el.tPairs.innerHTML=pairsHTML(0)}
   else if(ph.type==='round'){el.tPhase.innerHTML=`<span class="jp">始め</span>Round ${ph.r+1} <small>of ${total}</small>`+stop;el.tSub.textContent='';el.tPairs.innerHTML=pairsHTML(ph.r,true)}
